@@ -1,0 +1,18 @@
+[tool.ui-test-config]
+driver_type = "firefox"
+base_url = "https://insiderone.com/"
+qa_careers_url = "https://insiderone.com/careers/quality-assurance/"
+headless = false
+
+screenshot_dir = "reports/screenshots"
+screenshot_on_failure = true
+
+implicit_wait_timeout = 30
+element_wait_timeout = 60
+
+[tool.pytest.ini_options]
+addopts = "-v --alluredir=allure-results"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

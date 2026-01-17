@@ -1,0 +1,226 @@
+version: '3.8'
+
+services:
+  # ==================== Selenium Grid ====================
+  selenium-hub:
+    image: seleniarm/hub:latest
+    container_name: selenium-hub
+    ports:
+      - "4442:4442"
+      - "4443:4443"
+      - "4444:4444"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4444/wd/hub/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  chrome:
+    image: seleniarm/node-chromium:latest
+    container_name: chrome
+    shm_size: 2gb
+    depends_on:
+      selenium-hub:
+        condition: service_healthy
+    environment:
+      - SE_EVENT_BUS_HOST=selenium-hub
+      - SE_EVENT_BUS_PUBLISH_PORT=4442
+      - SE_EVENT_BUS_SUBSCRIBE_PORT=4443
+      - SE_NODE_MAX_SESSIONS=1
+      - SE_SCREEN_WIDTH=1920
+      - SE_SCREEN_HEIGHT=1080
+      - SE_VNC_NO_PASSWORD=true
+      - SE_START_VNC=true
+      - SE_START_XVFB=true
+    volumes:
+      - /tmp/test-recordings:/videos:rw
+    ports:
+      - "7900:7900"
+      - "5555:5555"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5555/status"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  chrome_video:
+    image: selenium/video:ffmpeg-7.1-20250222
+    container_name: chrome-video
+    volumes:
+      - /tmp/test-recordings:/videos:rw
+    depends_on:
+      chrome:
+        condition: service_healthy
+      create-bucket:
+        condition: service_completed_successfully
+    environment:
+      - DISPLAY_CONTAINER_NAME=chrome
+      - SE_NODE_GRID_URL=http://selenium-hub:4444
+      - SE_VIDEO_FILE_NAME=auto
+      - SE_VIDEO_UPLOAD_ENABLED=true
+      - SE_UPLOAD_DESTINATION_PREFIX=s3://videos
+      - RCLONE_CONFIG_S3_TYPE=s3
+      - RCLONE_CONFIG_S3_PROVIDER=Minio
+      - RCLONE_CONFIG_S3_ENV_AUTH=false
+      - RCLONE_CONFIG_S3_ACCESS_KEY_ID=minio
+      - RCLONE_CONFIG_S3_SECRET_ACCESS_KEY=minio123
+      - RCLONE_CONFIG_S3_ENDPOINT=http://minio:9000
+      - RCLONE_CONFIG_S3_NO_CHECK_BUCKET=true
+
+  firefox:
+    image: seleniarm/node-firefox:latest
+    container_name: firefox
+    shm_size: 2gb
+    depends_on:
+      selenium-hub:
+        condition: service_healthy
+    environment:
+      - SE_EVENT_BUS_HOST=selenium-hub
+      - SE_EVENT_BUS_PUBLISH_PORT=4442
+      - SE_EVENT_BUS_SUBSCRIBE_PORT=4443
+      - SE_NODE_MAX_SESSIONS=1
+      - SE_SCREEN_WIDTH=1920
+      - SE_SCREEN_HEIGHT=1080
+      - SE_VNC_NO_PASSWORD=true
+      - SE_START_VNC=true
+      - SE_START_XVFB=true
+    volumes:
+      - /tmp/test-recordings:/videos:rw
+    ports:
+      - "7901:7900"
+      - "5556:5555"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5555/status"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  firefox_video:
+    image: selenium/video:ffmpeg-7.1-20250222
+    container_name: firefox-video
+    volumes:
+      - /tmp/test-recordings:/videos:rw
+    depends_on:
+      firefox:
+        condition: service_healthy
+      create-bucket:
+        condition: service_completed_successfully
+    environment:
+      - DISPLAY_CONTAINER_NAME=firefox
+      - SE_NODE_GRID_URL=http://selenium-hub:4444
+      - SE_VIDEO_FILE_NAME=auto
+      - SE_VIDEO_UPLOAD_ENABLED=true
+      - SE_UPLOAD_DESTINATION_PREFIX=s3://videos
+      - RCLONE_CONFIG_S3_TYPE=s3
+      - RCLONE_CONFIG_S3_PROVIDER=Minio
+      - RCLONE_CONFIG_S3_ENV_AUTH=false
+      - RCLONE_CONFIG_S3_ACCESS_KEY_ID=minio
+      - RCLONE_CONFIG_S3_SECRET_ACCESS_KEY=minio123
+      - RCLONE_CONFIG_S3_ENDPOINT=http://minio:9000
+      - RCLONE_CONFIG_S3_NO_CHECK_BUCKET=true
+
+  # ==================== MinIO (S3 Storage) ====================
+  minio:
+    image: minio/minio
+    container_name: minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - /tmp/test-recordings:/data
+    environment:
+      - MINIO_ROOT_USER=minio
+      - MINIO_ROOT_PASSWORD=minio123
+    command: server /data --console-address :9001
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  create-bucket:
+    image: minio/mc
+    container_name: minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      sleep 3;
+      /usr/bin/mc alias set myminio http://minio:9000 minio minio123;
+      /usr/bin/mc mb --ignore-existing myminio/videos;
+      /usr/bin/mc anonymous set public myminio/videos;
+      /usr/bin/mc ls myminio/;
+      echo 'Bucket created and configured successfully';
+      exit 0;
+      "
+
+  # ==================== Allure Report ====================
+  allure:
+    image: frankescobar/allure-docker-service:latest
+    container_name: allure
+    environment:
+      CHECK_RESULTS_EVERY_SECONDS: NONE
+      KEEP_HISTORY: 1
+    ports:
+      - "5050:5050"
+    volumes:
+      - ./allure-results:/app/allure-results
+      - allure-reports:/app/allure-docker-api/static/projects
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5050/allure-docker-service/version"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  allure-ui:
+    image: frankescobar/allure-docker-service-ui:latest
+    container_name: allure-ui
+    environment:
+      ALLURE_DOCKER_PUBLIC_API_URL: "http://localhost:5050"
+      ALLURE_DOCKER_PUBLIC_API_URL_PREFIX: ""
+    ports:
+      - "5252:5252"
+    depends_on:
+      - allure
+
+  # ==================== Test Runners ====================
+  ui-test:
+    build:
+      context: ./ui-test
+      dockerfile: Dockerfile
+    container_name: ui-test-runner
+    volumes:
+      - ./allure-results:/app/allure-results
+    environment:
+      - SELENIUM_GRID_URL=http://selenium-hub:4444/wd/hub
+      - UI_TEST_DRIVER_TYPE=${UI_TEST_DRIVER_TYPE:-chrome}
+      - UI_TEST_HEADLESS=false
+      - MINIO_ENDPOINT=http://localhost:9000
+    depends_on:
+      selenium-hub:
+        condition: service_healthy
+      chrome:
+        condition: service_healthy
+      firefox:
+        condition: service_healthy
+      allure:
+        condition: service_healthy
+    profiles:
+      - test
+
+  api-test:
+    build:
+      context: ./api-test
+      dockerfile: Dockerfile
+    container_name: api-test-runner
+    volumes:
+      - ./allure-results:/app/allure-results
+    depends_on:
+      allure:
+        condition: service_healthy
+    profiles:
+      - test
+
+volumes:
+  allure-reports:
